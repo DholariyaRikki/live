@@ -6,9 +6,10 @@ from datetime import date, datetime
 import requests
 from pymongo import MongoClient, UpdateOne
 
-# ----------------------------------------------------
+# --------------------------------------------------
 # Logging
-# ----------------------------------------------------
+# --------------------------------------------------
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -16,22 +17,15 @@ logging.basicConfig(
 
 logger = logging.getLogger("AgriFlow")
 
-# ----------------------------------------------------
-# Mongo Config
-# ----------------------------------------------------
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
 
 MONGO_URI = os.getenv("MONGO_URI")
-
-DB_NAME = "agriflow_live"
-
-COLLECTION_NAME = "daily_prices"
-
-# ----------------------------------------------------
-# API
-# ----------------------------------------------------
+DB_NAME = os.getenv("MONGO_DB_NAME", "agriflow_live")
+COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "daily_prices")
 
 FILTER_URL = "https://api.agmarknet.gov.in/v1/daily-price-arrival/filters"
-
 REPORT_URL = "https://api.agmarknet.gov.in/v1/prices-and-arrivals/market-report/daily"
 
 HEADERS = {
@@ -39,18 +33,14 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-
-# ----------------------------------------------------
-# Mongo
-# ----------------------------------------------------
+# --------------------------------------------------
+# MongoDB
+# --------------------------------------------------
 
 client = MongoClient(MONGO_URI)
-
 db = client[DB_NAME]
-
 collection = db[COLLECTION_NAME]
 
-# Unique Index
 collection.create_index(
     [
         ("date", 1),
@@ -62,171 +52,164 @@ collection.create_index(
     unique=True
 )
 
-
-# ----------------------------------------------------
-# Get Gujarat Markets
-# ----------------------------------------------------
+# --------------------------------------------------
+# Fetch Gujarat Markets
+# --------------------------------------------------
 
 def fetch_market_ids():
 
     logger.info("Fetching Gujarat Market IDs...")
 
-    r = requests.get(FILTER_URL, headers=HEADERS)
+    r = requests.get(FILTER_URL, headers=HEADERS, timeout=60)
+    r.raise_for_status()
 
-    data = r.json()
+    response = r.json()
 
-    markets = data["data"]["market_data"]
+    markets = response.get("data", {}).get("market_data", [])
 
-    ids = []
-
-    for market in markets:
-
-        if market["state_id"] == 11:
-            ids.append(market["id"])
+    ids = [
+        market["id"]
+        for market in markets
+        if market.get("state_id") == 11
+    ]
 
     logger.info(f"Found {len(ids)} markets")
 
     return ids
 
-
-# ----------------------------------------------------
+# --------------------------------------------------
 # Fetch Report
-# ----------------------------------------------------
+# --------------------------------------------------
 
 def fetch_report(today, market_ids):
 
     payload = {
-
         "date": today,
-
         "State": [11],
-
         "stateIds": [11],
-
         "marketIds": market_ids,
-
         "includeExcel": False,
-
         "title": "Market-wise Commodity Report"
-
     }
 
-    for i in range(3):
+    for attempt in range(3):
 
         try:
 
             r = requests.post(
-
                 REPORT_URL,
-
                 json=payload,
-
                 headers=HEADERS,
-
-                timeout=60
-
+                timeout=120
             )
 
-            if r.status_code == 200:
+            r.raise_for_status()
 
-                logger.info("Report Downloaded")
+            report = r.json()
 
-                return r.json()
+            logger.info("Report Downloaded")
+
+            return report
 
         except Exception as e:
 
-            logger.error(e)
+            logger.error(f"Attempt {attempt+1}: {e}")
 
             time.sleep(5)
 
     return None
 
+# --------------------------------------------------
+# Detect states
+# --------------------------------------------------
 
-# ----------------------------------------------------
+def get_states(report):
+
+    if not report:
+        return []
+
+    if "data" in report and isinstance(report["data"], dict):
+        return report["data"].get("states", [])
+
+    return report.get("states", [])
+
+# --------------------------------------------------
 # Convert JSON to Mongo Documents
-# ----------------------------------------------------
+# --------------------------------------------------
 
 def prepare_documents(report, report_date):
 
-    docs = []
+    documents = []
 
-    states = report["data"]["states"]
+    states = get_states(report)
+
+    if not states:
+        logger.error("No states found in API response.")
+        logger.info(report.keys())
+        return documents
 
     for state in states:
 
-        state_name = state["stateName"]
+        state_id = state.get("stateId")
+        state_name = state.get("stateName")
 
-        state_id = state["stateId"]
+        for market in state.get("markets", []):
 
-        for market in state["markets"]:
+            market_id = market.get("marketId")
+            market_name = market.get("marketName")
 
-            market_id = market["marketId"]
-
-            market_name = market["marketName"]
-
-            commodities = market.get("commodities", [])
-
-            for commodity in commodities:
+            for commodity in market.get("commodities", []):
 
                 if "commodityId" not in commodity:
                     continue
 
-                commodity_id = commodity["commodityId"]
-
-                commodity_name = commodity["commodityName"]
+                commodity_id = commodity.get("commodityId")
+                commodity_name = commodity.get("commodityName")
 
                 total_arrivals = commodity.get("total_arrivals", 0)
 
                 for row in commodity.get("data", []):
 
-                    docs.append({
+                    documents.append({
 
                         "date": report_date,
 
                         "state_id": state_id,
-
                         "state_name": state_name,
 
                         "market_id": market_id,
-
                         "market_name": market_name,
 
                         "commodity_id": commodity_id,
-
                         "commodity_name": commodity_name,
 
                         "variety": row.get("variety"),
-
                         "grade": row.get("grade"),
 
                         "arrival": row.get("arrivals"),
-
                         "total_arrivals": total_arrivals,
 
-                        "unit_arrival": row.get("unitOfArrivals"),
-
                         "minimum_price": row.get("minimumPrice"),
-
                         "maximum_price": row.get("maximumPrice"),
-
                         "modal_price": row.get("modalPrice"),
 
+                        "unit_arrival": row.get("unitOfArrivals"),
                         "unit_price": row.get("unitOfPrice"),
 
-                        "created_at": datetime.utcnow(),
-
                         "updated_at": datetime.utcnow()
-
                     })
 
-    return docs
+    return documents
 
-
-# ----------------------------------------------------
-# Save Mongo
-# ----------------------------------------------------
+# --------------------------------------------------
+# Save to MongoDB
+# --------------------------------------------------
 
 def save_documents(documents):
+
+    if not documents:
+        logger.warning("No documents to save.")
+        return
 
     operations = []
 
@@ -237,35 +220,18 @@ def save_documents(documents):
             UpdateOne(
 
                 {
-
                     "date": doc["date"],
-
                     "market_id": doc["market_id"],
-
                     "commodity_id": doc["commodity_id"],
-
                     "variety": doc["variety"],
-
                     "grade": doc["grade"]
-
                 },
 
                 {
-
-                    "$set": {
-
-                        **doc,
-
-                        "updated_at": datetime.utcnow()
-
-                    },
-
+                    "$set": doc,
                     "$setOnInsert": {
-
                         "created_at": datetime.utcnow()
-
                     }
-
                 },
 
                 upsert=True
@@ -274,18 +240,14 @@ def save_documents(documents):
 
         )
 
-    if operations:
+    result = collection.bulk_write(operations)
 
-        result = collection.bulk_write(operations)
+    logger.info(f"Inserted : {result.upserted_count}")
+    logger.info(f"Modified : {result.modified_count}")
 
-        logger.info("Inserted : %s", result.upserted_count)
-
-        logger.info("Updated  : %s", result.modified_count)
-
-
-# ----------------------------------------------------
+# --------------------------------------------------
 # Main
-# ----------------------------------------------------
+# --------------------------------------------------
 
 def main():
 
@@ -295,13 +257,17 @@ def main():
 
     market_ids = fetch_market_ids()
 
+    if not market_ids:
+        logger.error("No market IDs found.")
+        return
+
     report = fetch_report(today, market_ids)
 
-    if report is None:
-
-        logger.error("Failed to fetch report")
-
+    if not report:
+        logger.error("Report download failed.")
         return
+
+    logger.info(f"Response Keys: {list(report.keys())}")
 
     documents = prepare_documents(report, today)
 
@@ -309,9 +275,9 @@ def main():
 
     save_documents(documents)
 
-    logger.info("Mongo Sync Completed")
+    logger.info("Sync Completed Successfully")
 
+# --------------------------------------------------
 
 if __name__ == "__main__":
-
     main()
