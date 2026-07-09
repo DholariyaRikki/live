@@ -1,3 +1,4 @@
 .env.example
 README.md
 requirements.txt
+.env

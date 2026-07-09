@@ -87,6 +87,20 @@ def store_in_mongodb(report_data, date_str):
         logger.error("No data to store in MongoDB.")
         return False
         
+    # Check if using default placeholder string
+    if "abcde" in MONGO_URI or not MONGO_URI:
+        import json
+        output_path = os.path.join(os.path.dirname(__file__), "output.json")
+        logger.info(f"Using default placeholder URI. Running in Local Test Mode. Saving today's payload to {output_path}...")
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(report_data, f, indent=4)
+            logger.info("Local Test Mode completed successfully! Today's API data was fetched and saved locally.")
+            return True
+        except Exception as err:
+            logger.error(f"Failed to write local file: {err}")
+            return False
+            
     try:
         logger.info(f"Connecting to MongoDB...")
         client = MongoClient(MONGO_URI)
