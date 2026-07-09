@@ -19,9 +19,9 @@ logger = logging.getLogger('live.sync')
 # Load environment variables
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://admin:admin123@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority")
-DB_NAME = os.getenv("MONGO_DB_NAME", "agriflow_live")
-COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME", "daily_prices")
+MONGO_URI = os.getenv("MONGO_URI") or "mongodb+srv://admin:admin123@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority"
+DB_NAME = os.getenv("MONGO_DB_NAME") or "agriflow_live"
+COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME") or "daily_prices"
 
 FILTERS_URL = "https://api.agmarknet.gov.in/v1/daily-price-arrival/filters"
 REPORT_URL = "https://api.agmarknet.gov.in/v1/prices-and-arrivals/market-report/daily"
