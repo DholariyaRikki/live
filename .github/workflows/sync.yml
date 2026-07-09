@@ -23,7 +23,11 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r live/requirements.txt
+        if [ -d "live" ]; then
+          pip install -r live/requirements.txt
+        else
+          pip install -r requirements.txt
+        fi
 
     - name: Run Standalone Sync
       env:
@@ -31,4 +35,8 @@ jobs:
         MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
         MONGO_COLLECTION_NAME: ${{ secrets.MONGO_COLLECTION_NAME }}
       run: |
-        python live/sync_mongo.py
+        if [ -d "live" ]; then
+          python live/sync_mongo.py
+        else
+          python sync_mongo.py
+        fi
