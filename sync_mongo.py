@@ -37,6 +37,7 @@ def get_gujarat_market_ids():
         response = requests.get(FILTERS_URL, headers=HEADERS, timeout=60)
         if response.status_code != 200:
             logger.error(f"Failed to fetch filters: HTTP {response.status_code}")
+            logger.error(f"Response Content: {response.text[:200]}")
             return []
             
         data = response.json()
@@ -45,8 +46,12 @@ def get_gujarat_market_ids():
         
         logger.info(f"Successfully retrieved {len(guj_market_ids)} Gujarat market IDs.")
         return guj_market_ids
+    except requests.exceptions.RequestException as req_err:
+        logger.error(f"Network error while connecting to filters API: {req_err}")
+        logger.error("TIP: If running in GitHub Actions, the API gateway might be blocking GitHub Actions cloud IPs. Try running manually or using a proxy.")
+        return []
     except Exception as e:
-        logger.error(f"Error fetching market list: {e}")
+        logger.error(f"Error parsing market list: {e}")
         return []
 
 def fetch_daily_report(date_str, market_ids):
