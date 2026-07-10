@@ -4,7 +4,7 @@ on:
   schedule:
     # Run every 2 hours (12 times a day, completely free)
     # - cron: '0 */2 * * *'
-    - cron: '*/10 * * * *'
+    - cron: '*/1 * * * *'
   workflow_dispatch:
     # Allows manual trigger via GitHub Actions UI
 
